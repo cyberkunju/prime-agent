@@ -56,6 +56,7 @@ impl AgentSessionEngine {
                 config.agent_dir.clone(),
                 link_config.active_session_id.clone(),
                 std::sync::Arc::clone(&model_refusal_telemetry),
+                link_config.worker_token.clone(),
             ))
         });
         let autonomous_driver = std::sync::RwLock::new(std::sync::Arc::new(
@@ -137,7 +138,7 @@ impl AgentSessionEngine {
             goal_budget_crossed: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             goal_input_probe: std::sync::Mutex::new(None),
             goal_admission_sink: std::sync::Mutex::new(None),
-            bash_completion_sink: std::sync::Mutex::new(None),
+            kernel_notice_sink: std::sync::Mutex::new(None),
             bash_consumed_sink: std::sync::Mutex::new(None),
             goal_queue_purge: std::sync::Mutex::new(None),
             goal_backoff_wake_job_id: std::sync::Mutex::new(None),
@@ -949,7 +950,7 @@ impl AgentSessionEngine {
         let mut handlers = HostRequestHandlers::default();
         register_agent_message_host_handlers(sender, &mut handlers);
         register_agent_observe_host_handlers(observer, &mut handlers);
-        self.register_bash_notice_host_handlers(&mut handlers);
+        self.register_kernel_notice_host_handlers(&mut handlers);
         Some(handlers)
     }
 
@@ -1053,7 +1054,7 @@ impl AgentSessionEngine {
         // The engine session stays non-persisted (the worker owns the
         // durable file); the configured session dir leads, the file's
         // parent is the fallback.
-        let session_manager = match self
+        let mut session_manager = match self
             .config
             .session_dir
             .as_deref()
@@ -1067,6 +1068,19 @@ impl AgentSessionEngine {
             }
             None => pa_core::session::manager::SessionManager::in_memory(&cwd),
         };
+        // The in-memory manager takes the durable file's header id, as TS's engine opened the
+        // durable file: provider requests key prompt caching, Codex socket reuse, and session
+        // headers on it, so it must survive a resume in a new worker, a replacement build, and
+        // a daemon restart. A pathless session keeps the manager's own id.
+        if let Some(header) = session_file
+            .as_deref()
+            .and_then(pa_core::session::manager::read_session_header)
+        {
+            session_manager.new_session(&pa_core::session::manager::NewSessionOptions {
+                id: Some(header.id),
+                ..Default::default()
+            });
+        }
         if let Some(children) = &self.children {
             children.set_model(format!("{}/{}", model.provider, model.id));
         }
@@ -1174,6 +1188,7 @@ impl AgentSessionEngine {
             // Prewarm; the depth gate keeps subagent workers lazy.
             prewarm_ipython_kernel: Some(true),
             on_background_work_settled,
+            bash_notice_wake: None,
             // The worker-installed purge withdraws queued minted continuations.
             queued_goal_context_purge,
             // The steering lane owns the stop hooks (a queued steer cuts the next turn).

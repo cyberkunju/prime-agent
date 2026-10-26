@@ -24,7 +24,7 @@ mod queue;
 pub use queue::Lane;
 pub use queue::QueuePriority;
 pub(crate) use queue::{
-    admit_autonomous_follow_up, admit_bash_completion_notice, admit_goal_follow_up,
+    admit_autonomous_follow_up, admit_goal_follow_up, admit_kernel_notice,
     checkpoint_queue_recovery, clear_withdrawn_progress_note, enqueue_priority,
     gather_delivery_batch, parse_custom_message, parse_prompt_images, queue_lanes,
     restore_queue_snapshot, restored_turn_policy, withdraw_bash_completion_notice, QueueCheckpoint,
@@ -40,8 +40,9 @@ use create::{active_session_id_of, worker_server_capabilities};
 // session_summary/SummaryInputs serve the in-crate test modules only, so allow the unused import.
 #[allow(unused_imports)]
 pub(crate) use summary::{
-    compact_action_label, emit_worker_event_with, persist_custom_row, push_roster_delta,
-    session_snapshot, session_summary, RosterPushContext, SummaryInputs,
+    broadcast_custom_row_locked, compact_action_label, emit_worker_event_locked,
+    emit_worker_event_with, persist_custom_row, push_roster_delta, session_snapshot,
+    session_summary, RosterPushContext, SummaryInputs,
 };
 use turn::TurnRunner;
 
@@ -321,6 +322,7 @@ impl Worker {
             active_action: None,
             running_tool_calls: std::collections::HashSet::new(),
             running_admission_ids: std::collections::HashSet::new(),
+            tool_use_count: 0,
         };
         let active_session_id = config.active_session_id.clone();
         let script = config.script.clone();
@@ -608,25 +610,25 @@ impl Worker {
                         );
                     });
                 concrete.set_compaction_summary_sink(summary_sink);
-                // The bash-completion wake seam (TS `_promptInjectedMessage`
-                // for `bash.completed`): the handler validates, the sink
-                // admits/withdraws through the queue lanes.
+                // The kernel-notice wake seam (TS `_promptInjectedMessage`
+                // for `bash.completed` and `factory.progress`): the handlers
+                // validate, the sinks admit/withdraw through the queue lanes.
                 let notice_engine = std::sync::Arc::downgrade(concrete);
                 let notice_core = Arc::clone(&core);
                 let notice_notify = Arc::clone(&work_notify);
                 let notice_recovery = Arc::clone(&recovery);
-                let completion: crate::engine::BashCompletionSink = Arc::new(move |notice| {
+                let notice_sink: crate::engine::KernelNoticeSink = Arc::new(move |notice| {
                     let Some(engine) = notice_engine.upgrade() else {
                         return;
                     };
                     if engine.session_is_closed() {
                         return;
                     }
-                    admit_bash_completion_notice(
+                    admit_kernel_notice(
                         &notice_recovery,
                         &notice_core,
                         &notice_notify,
-                        &notice,
+                        notice,
                         // Revalidated inside the admission's lock section: the
                         // close paths mark the session BEFORE clearing the lanes.
                         || engine.session_is_closed(),
@@ -644,7 +646,7 @@ impl Worker {
                         engine.as_deref().map(|engine| engine as &dyn SessionEngine),
                     );
                 });
-                concrete.set_bash_notice_sinks(completion, consumed);
+                concrete.set_kernel_notice_sinks(notice_sink, consumed);
                 // The accepted note frames as a session event on the pump.
                 let note_core = Arc::clone(&core);
                 let note_events = events.clone();
@@ -920,8 +922,8 @@ fn emit_refinement_row(
     review_session_id: &str,
     message: &Value,
 ) -> bool {
+    let mut core = core.lock().unwrap();
     {
-        let mut core = core.lock().unwrap();
         let Some(store) = core.store.as_mut() else {
             return false;
         };
@@ -942,16 +944,7 @@ fn emit_refinement_row(
             }),
         );
     }
-    emit_worker_event_with(
-        core,
-        events,
-        json!({ "type": "message_start", "message": message }),
-    );
-    emit_worker_event_with(
-        core,
-        events,
-        json!({ "type": "message_end", "message": message }),
-    );
+    broadcast_custom_row_locked(&mut core, events, message);
     true
 }
 

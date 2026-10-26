@@ -254,49 +254,9 @@ pub struct TelemetrySettings {
     pub local_mirror: Option<bool>,
 }
 
-/// User-declared MCP server (settings `mcpServers` entry).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "kebab-case")]
-pub enum McpServerConfig {
-    Http {
-        url: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        headers: Option<serde_json::Map<String, serde_json::Value>>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        bearer_token_env_var: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        oauth: Option<bool>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        enabled: Option<bool>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        enabled_tools: Option<Vec<String>>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        disabled_tools: Option<Vec<String>>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        startup_timeout_ms: Option<u64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        call_timeout_ms: Option<u64>,
-    },
-    Stdio {
-        command: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        args: Option<Vec<String>>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        cwd: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        env: Option<serde_json::Map<String, serde_json::Value>>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        enabled: Option<bool>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        enabled_tools: Option<Vec<String>>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        disabled_tools: Option<Vec<String>>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        startup_timeout_ms: Option<u64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        call_timeout_ms: Option<u64>,
-    },
-}
+/// The default per-cell watchdog budget for user `python_repl` cells: 60
+/// seconds.
+pub const DEFAULT_PYTHON_CELL_TIMEOUT_MS: u64 = 60_000;
 
 /// The settings document: every known field optional; unknown keys preserved.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -315,13 +275,6 @@ pub struct Settings {
     pub rlm_max_depth: Option<u64>,
     /// `number | "off" | "none"`; raw JSON because the TS getter validates at access time.
     pub idle_eviction_minutes: Option<serde_json::Value>,
-    /// Session archiving age rule: sessions untouched for this many days are
-    /// moved to the daemon's archive directory. `number | "off" | "none"`; raw
-    /// JSON validated at access time (same grammar as `idleEvictionMinutes`).
-    pub session_archive_max_age_days: Option<serde_json::Value>,
-    /// Session archiving count rule: keep at most this many unarchived sessions (newest by mtime
-    /// win); `0 | "off" | "none"` disables. Raw JSON validated at access time.
-    pub session_archive_max_sessions: Option<serde_json::Value>,
     pub transport: Option<TransportSetting>,
     pub steering_mode: Option<QueueModeSetting>,
     pub follow_up_mode: Option<QueueModeSetting>,
@@ -340,6 +293,10 @@ pub struct Settings {
     /// session model does not accept image input. Default: none - image turns on a text-only model
     /// fail with a configuration hint instead of silently dropping the images.
     pub image_model: Option<String>,
+    /// Per-cell watchdog budget for user `python_repl` cells, in milliseconds
+    /// (default [`DEFAULT_PYTHON_CELL_TIMEOUT_MS`]; `0` disables). Daemonless
+    /// sessions never arm it.
+    pub python_cell_timeout_ms: Option<u64>,
     pub autonomous: Option<AutonomousSettings>,
     /// Custom shell that runs every kernel `bash()` and user-bash command as
     /// `<shell> -c <command>`: an absolute path to an existing executable,
