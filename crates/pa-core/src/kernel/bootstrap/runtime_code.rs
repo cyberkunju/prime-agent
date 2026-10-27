@@ -45,9 +45,13 @@ try:
 /// registered the [`crate::kernel::shared::BASH_COMPLETED_REQUEST_TYPE`]
 /// handler: turns the runtime's bounded `await bash()` default on. Without
 /// the notice nothing wakes a cell that ended its turn on a degraded command,
-/// so daemonless sessions keep the unbounded await.
-const RLM_BOOTSTRAP_BASH_NOTICES_LINE_CODE: &str =
-    "    _prime_agent_rlm_module._set_completion_notices_wired(True)\n";
+/// so daemonless sessions keep the unbounded await. The toggle is
+/// version-tolerant: a stale kernel venv whose prime-agent-runtime predates
+/// the completion-notice surface (no `_set_completion_notices_wired`)
+/// boots with the unbounded `await bash()` default instead of failing the
+/// whole kernel import, so a daemon upgrade without a venv rebuild degrades
+/// instead of breaking `rlm`/`bash` entirely.
+const RLM_BOOTSTRAP_BASH_NOTICES_LINE_CODE: &str = "    _prime_agent_set_completion_notices_wired = getattr(_prime_agent_rlm_module, \"_set_completion_notices_wired\", None)\n    _prime_agent_set_completion_notices_wired(True) if callable(_prime_agent_set_completion_notices_wired) else None\n";
 
 const RLM_BOOTSTRAP_RUNTIME_TAIL_CODE: &str = r#"
 except Exception as _prime_agent_rlm_error:
@@ -210,8 +214,8 @@ mod tests {
         let daemonless = build_rlm_bootstrap_code(&[], false);
         let noticed = build_rlm_bootstrap_code(&[], true);
         assert!(
-            noticed.contains("_set_completion_notices_wired(True)"),
-            "the wired bootstrap must enable the bounded bash default: {noticed}"
+            noticed.contains("getattr(_prime_agent_rlm_module, \"_set_completion_notices_wired\""),
+            "the wired bootstrap must enable the bounded bash default tolerantly: {noticed}"
         );
         assert!(
             !daemonless.contains("_set_completion_notices_wired"),

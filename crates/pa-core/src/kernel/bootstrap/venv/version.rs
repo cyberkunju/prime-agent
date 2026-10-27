@@ -3,7 +3,14 @@
 use super::{default_rlm_extra_uv_args, BootstrapPythonSkill, BootstrapVersion, Path};
 
 /// Schema of `.bootstrap-version`; a mismatch rebuilds the venv.
-pub(super) const BOOTSTRAP_SCHEMA: u64 = 9;
+///
+/// Bumped 9 -> 10 for the persistent-`bash()` + completion-notice runtime
+/// surface (`persistent_shells`, `BashSnapshot`, `yield_after`,
+/// `_set_completion_notices_wired`): the 0.10.1-era venvs that predate it
+/// must rebuild even though their recorded schema still reads 9, or a new
+/// daemon keeps reusing a stale venv whose probe memo pre-dates the new
+/// `RUNTIME_READY_CHECK` asserts.
+pub(super) const BOOTSTRAP_SCHEMA: u64 = 10;
 pub(super) const STATE_SNAPSHOT_REQUIREMENT: &str = "dill";
 const BOOTSTRAP_VERSION_FILE: &str = ".bootstrap-version";
 pub(super) fn read_bootstrap_version(venv: &Path) -> Option<BootstrapVersion> {
